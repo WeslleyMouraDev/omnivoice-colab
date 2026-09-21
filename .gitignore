@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Model weights and temporary audio
+Omni_Audio/
+Omni_Studio_Output/
+OmniVoice_Model/
+generated_subtitle/
+subtitle_audio/
+*.wav
+*.mp3
+*.srt
+
+# Virtual environments
+.venv/
+venv/
+env/
