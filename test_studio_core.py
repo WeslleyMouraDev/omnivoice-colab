@@ -2,6 +2,7 @@ import os
 import unittest
 import numpy as np
 import tempfile
+import studio_core
 from studio_core import (
     split_for_subtitles,
     format_srt_timestamp,
@@ -160,7 +161,8 @@ class TestStudioCore(unittest.TestCase):
             subtitle_max_chars=180,
         )
         self.assertIn("Sucesso!", status)
-        block = 20 + 500 + 300 + 500 + 20
+        edge = studio_core.STUDIO_BLOCK_EDGE_MS
+        block = edge + 500 + studio_core.MAX_PAUSE_MS + 500 + edge
         self.assertEqual(len(audio_tuple[1]), block + 140 + block)
         with open(srt_path, "r", encoding="utf-8") as f:
             srt_content = f.read()

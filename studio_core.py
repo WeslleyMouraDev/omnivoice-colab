@@ -311,11 +311,11 @@ def convert_wav_to_mp3(wav_path: str, mp3_path: str, bitrate: str = "192k") -> s
 # ---------------------------------------------------------------------------
 # Remoção de silêncio do áudio final
 # ---------------------------------------------------------------------------
-MAX_PAUSE_MS = int(os.environ.get("OMNIVOICE_MAX_PAUSE_MS", "300") or 300)
-EDGE_SILENCE_MS = int(os.environ.get("OMNIVOICE_EDGE_SILENCE_MS", "80") or 80)
-SILENCE_THRESHOLD_DB = float(os.environ.get("OMNIVOICE_SILENCE_THRESHOLD_DB", "-42") or -42)
+MAX_PAUSE_MS = int(os.environ.get("OMNIVOICE_MAX_PAUSE_MS", "450") or 450)
+EDGE_SILENCE_MS = int(os.environ.get("OMNIVOICE_EDGE_SILENCE_MS", "120") or 120)
+SILENCE_THRESHOLD_DB = float(os.environ.get("OMNIVOICE_SILENCE_THRESHOLD_DB", "-50") or -50)
 # No modo Studio a pausa entre blocos já é inserida por pause_ms.
-STUDIO_BLOCK_EDGE_MS = int(os.environ.get("OMNIVOICE_STUDIO_BLOCK_EDGE_MS", "20") or 20)
+STUDIO_BLOCK_EDGE_MS = int(os.environ.get("OMNIVOICE_STUDIO_BLOCK_EDGE_MS", "100") or 100)
 
 
 def compress_silences(
@@ -328,7 +328,7 @@ def compress_silences(
 ) -> np.ndarray:
     """
     Encurta silêncios do áudio final sem cortar fala:
-    - pausas internas maiores que max_pause_ms ficam com max_pause_ms
+    - pausas internas maiores que max_pause_ms (padrão 450 ms) ficam com max_pause_ms
       (metade preservada no fim da fala anterior e metade antes da próxima);
     - silêncio no início e no fim fica com edge_ms.
     Deve rodar antes de gerar o SRT, para as legendas acompanharem o áudio.
