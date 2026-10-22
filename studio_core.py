@@ -264,6 +264,83 @@ def convert_wav_to_mp3(wav_path: str, mp3_path: str, bitrate: str = "192k") -> s
 
 
 # ---------------------------------------------------------------------------
+# Síntese em lotes na GPU
+# ---------------------------------------------------------------------------
+DEFAULT_TTS_BATCH_SIZE = int(os.environ.get("OMNIVOICE_TTS_BATCH_SIZE", "8") or 8)
+
+
+def _to_int16(waveform: Any) -> np.ndarray:
+    if hasattr(waveform, "cpu"):
+        waveform = waveform.cpu().numpy()
+    if hasattr(waveform, "squeeze"):
+        waveform = waveform.squeeze()
+    if waveform.dtype != np.int16:
+        waveform = (waveform * 32767).astype(np.int16)
+    return waveform
+
+
+def _is_out_of_memory(error: Exception) -> bool:
+    return "out of memory" in str(error).lower()
+
+
+def _release_gpu_memory() -> None:
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001 - liberar memória é apenas uma tentativa
+        pass
+
+
+def _synthesize_in_batches(
+    model: Any,
+    blocks: List[str],
+    language: str,
+    voice_prompt: Any,
+    gen_config: Any,
+    speed: Optional[float],
+    batch_size: Optional[int],
+) -> List[np.ndarray]:
+    """
+    Gera vários blocos por chamada de model.generate, que processa a lista em
+    paralelo na GPU. A ordem dos blocos é preservada. Se a GPU ficar sem memória,
+    o lote é reduzido pela metade e o mesmo trecho é refeito.
+    """
+    size = max(1, int(batch_size or DEFAULT_TTS_BATCH_SIZE))
+    audios: List[np.ndarray] = []
+    start = 0
+    while start < len(blocks):
+        chunk = [block.strip() for block in blocks[start:start + size]]
+        gen_kwargs: Dict[str, Any] = {
+            "text": chunk,
+            "language": language,
+            "voice_clone_prompt": voice_prompt,
+        }
+        if gen_config is not None:
+            gen_kwargs["generation_config"] = gen_config
+        if speed is not None and float(speed) != 1.0:
+            gen_kwargs["speed"] = float(speed)
+        try:
+            outputs = model.generate(**gen_kwargs)
+        except Exception as error:  # noqa: BLE001 - OOM vira lote menor
+            if _is_out_of_memory(error) and size > 1:
+                _release_gpu_memory()
+                size = max(1, size // 2)
+                logger.warning(f"GPU sem memória; reduzindo o lote para {size} blocos.")
+                continue
+            raise RuntimeError(f"bloco {start + 1}/{len(blocks)}: {error}") from error
+        if len(outputs) != len(chunk):
+            raise RuntimeError(
+                f"o modelo devolveu {len(outputs)} áudios para {len(chunk)} blocos a partir do bloco {start + 1}"
+            )
+        audios.extend(_to_int16(output) for output in outputs)
+        logger.info(f"Blocos sintetizados: {min(start + len(chunk), len(blocks))}/{len(blocks)}")
+        start += len(chunk)
+    return audios
+
+
+# ---------------------------------------------------------------------------
 # Síntese Completa por Blocos com SRT e MP3
 # ---------------------------------------------------------------------------
 def generate_blocks_tts(
@@ -278,6 +355,7 @@ def generate_blocks_tts(
     subtitle_max_chars: int = 180,
     language: str = "Portuguese",
     generation_config_cls: Any = None,
+    batch_size: Optional[int] = None,
 ) -> Tuple[Optional[Tuple[int, np.ndarray]], Optional[str], Optional[str], str]:
     """
     Executa a síntese de fala bloco a bloco:
@@ -318,33 +396,14 @@ def generate_blocks_tts(
     subtitles: List[Dict[str, Any]] = []
     cursor_samples = 0
 
-    for idx, block_text in enumerate(blocks, start=1):
-        gen_kwargs: Dict[str, Any] = {
-            "text": block_text.strip(),
-            "language": language,
-            "voice_clone_prompt": voice_prompt,
-        }
-        if gen_config is not None:
-            gen_kwargs["generation_config"] = gen_config
-        if speed is not None and float(speed) != 1.0:
-            gen_kwargs["speed"] = float(speed)
+    try:
+        block_audios = _synthesize_in_batches(
+            model, blocks, language, voice_prompt, gen_config, speed, batch_size
+        )
+    except Exception as e:
+        return None, None, None, f"Erro ao sintetizar os blocos: {e}"
 
-        try:
-            audio_out = model.generate(**gen_kwargs)
-        except Exception as e:
-            return None, None, None, f"Erro ao sintetizar bloco {idx}/{len(blocks)}: {e}"
-
-        # Tratar tensor / ndarray
-        wf = audio_out[0]
-        if hasattr(wf, "cpu"):
-            wf = wf.cpu().numpy()
-        if hasattr(wf, "squeeze"):
-            wf = wf.squeeze()
-        
-        # Converter para int16
-        if wf.dtype != np.int16:
-            wf = (wf * 32767).astype(np.int16)
-
+    for idx, (block_text, wf) in enumerate(zip(blocks, block_audios), start=1):
         block_len = len(wf)
         start_sec = cursor_samples / float(sampling_rate)
         end_sec = (cursor_samples + block_len) / float(sampling_rate)

@@ -90,11 +90,12 @@ class TestStudioCore(unittest.TestCase):
         # Mock do modelo OmniVoice
         class MockModel:
             def generate(self, **kwargs):
-                # Retorna 1 segundo de seno a 24000Hz como int16
+                # Retorna 1 segundo de seno a 24000Hz como int16 para cada texto
                 sr = 24000
                 t = np.linspace(0, 1.0, sr, endpoint=False)
                 waveform = (np.sin(2 * np.pi * 440 * t) * 10000).astype(np.int16)
-                return [waveform]
+                texts = kwargs["text"] if isinstance(kwargs["text"], list) else [kwargs["text"]]
+                return [waveform for _ in texts]
 
         mock_model = MockModel()
         sampling_rate = 24000
@@ -127,6 +128,64 @@ class TestStudioCore(unittest.TestCase):
         self.assertIn("1\n00:00:00,000 --> 00:00:01,000", srt_content)
         # Bloco 2 deve iniciar exatamente em 1s + 200ms = 1.2s -> 00:00:01,200
         self.assertIn("2\n00:00:01,200 --> 00:00:02,200", srt_content)
+
+    def _sized_model(self, fail_above=None):
+        # Cada bloco vira um áudio com tamanho proporcional ao texto, para
+        # verificar ordem e timestamps depois da síntese em lotes.
+        calls = []
+
+        class SizedModel:
+            def generate(self, **kwargs):
+                texts = kwargs["text"]
+                calls.append(list(texts))
+                if fail_above is not None and len(texts) > fail_above:
+                    raise RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
+                return [np.full(len(text) * 100, 1000, dtype=np.int16) for text in texts]
+
+        return SizedModel(), calls
+
+    def test_generate_blocks_tts_batches_blocks_in_order(self):
+        model, calls = self._sized_model()
+        text = "Um. Dois dois. Três três três. Quatro quatro quatro quatro. Cinco."
+        blocks = split_for_subtitles(text, max_chars=20)
+        audio_tuple, _, srt_path, status = generate_blocks_tts(
+            model=model,
+            sampling_rate=1000,
+            voice_prompt="dummy_prompt",
+            text=text,
+            pause_ms=0,
+            subtitle_max_chars=20,
+            batch_size=2,
+        )
+        self.assertIn("Sucesso!", status)
+        self.assertGreater(len(blocks), 2)
+        expected_sizes = [min(2, len(blocks) - start) for start in range(0, len(blocks), 2)]
+        self.assertEqual([len(call) for call in calls], expected_sizes)
+        self.assertEqual([text for call in calls for text in call], blocks)
+        self.assertEqual(len(audio_tuple[1]), sum(len(block) * 100 for block in blocks))
+        with open(srt_path, "r", encoding="utf-8") as f:
+            srt_content = f.read()
+        first_end = len(blocks[0]) * 100 / 1000
+        self.assertIn(f"00:00:00,000 --> {format_srt_timestamp(first_end)}", srt_content)
+
+    def test_generate_blocks_tts_halves_batch_on_gpu_out_of_memory(self):
+        model, calls = self._sized_model(fail_above=2)
+        text = "Um. Dois dois. Três três três. Quatro quatro quatro quatro. Cinco."
+        blocks = split_for_subtitles(text, max_chars=20)
+        audio_tuple, _, _, status = generate_blocks_tts(
+            model=model,
+            sampling_rate=1000,
+            voice_prompt="dummy_prompt",
+            text=text,
+            pause_ms=0,
+            subtitle_max_chars=20,
+            batch_size=4,
+        )
+        self.assertIn("Sucesso!", status)
+        successful = [call for call in calls if len(call) <= 2]
+        self.assertEqual([text for call in successful for text in call], blocks)
+        self.assertEqual(len(audio_tuple[1]), sum(len(block) * 100 for block in blocks))
+
 
 if __name__ == "__main__":
     unittest.main()
