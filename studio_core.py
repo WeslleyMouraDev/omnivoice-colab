@@ -314,6 +314,8 @@ def convert_wav_to_mp3(wav_path: str, mp3_path: str, bitrate: str = "192k") -> s
 MAX_PAUSE_MS = int(os.environ.get("OMNIVOICE_MAX_PAUSE_MS", "300") or 300)
 EDGE_SILENCE_MS = int(os.environ.get("OMNIVOICE_EDGE_SILENCE_MS", "80") or 80)
 SILENCE_THRESHOLD_DB = float(os.environ.get("OMNIVOICE_SILENCE_THRESHOLD_DB", "-42") or -42)
+# No modo Studio a pausa entre blocos já é inserida por pause_ms.
+STUDIO_BLOCK_EDGE_MS = int(os.environ.get("OMNIVOICE_STUDIO_BLOCK_EDGE_MS", "20") or 20)
 
 
 def compress_silences(
@@ -517,6 +519,8 @@ def generate_blocks_tts(
         return None, None, None, f"Erro ao sintetizar os blocos: {e}"
 
     for idx, (block_text, wf) in enumerate(zip(blocks, block_audios), start=1):
+        # Silêncio removido antes de medir o bloco: o SRT usa a duração já encurtada.
+        wf = compress_silences(wf, sampling_rate, edge_ms=STUDIO_BLOCK_EDGE_MS)
         block_len = len(wf)
         start_sec = cursor_samples / float(sampling_rate)
         end_sec = (cursor_samples + block_len) / float(sampling_rate)

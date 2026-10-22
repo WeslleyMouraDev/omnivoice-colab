@@ -141,6 +141,36 @@ class TestStudioCore(unittest.TestCase):
         speech_samples = np.count_nonzero(np.abs(out) > 1000)
         self.assertEqual(speech_samples, 3 * np.count_nonzero(np.abs(speech) > 1000))
 
+    def test_generate_blocks_tts_removes_block_silence_and_keeps_srt_in_sync(self):
+        sr = 1000
+        speech = (np.sin(np.arange(500) / 3.0) * 12000).astype(np.int16)
+        silence = lambda ms: np.zeros(ms, dtype=np.int16)
+        noisy_block = np.concatenate([silence(400), speech, silence(900), speech, silence(600)])
+
+        class SilentEdgesModel:
+            def generate(self, **kwargs):
+                return [noisy_block for _ in kwargs["text"]]
+
+        audio_tuple, _, srt_path, status = generate_blocks_tts(
+            model=SilentEdgesModel(),
+            sampling_rate=sr,
+            voice_prompt="dummy_prompt",
+            text="Primeira frase.\n\nSegunda frase.",
+            pause_ms=140,
+            subtitle_max_chars=180,
+        )
+        self.assertIn("Sucesso!", status)
+        block = 20 + 500 + 300 + 500 + 20
+        self.assertEqual(len(audio_tuple[1]), block + 140 + block)
+        with open(srt_path, "r", encoding="utf-8") as f:
+            srt_content = f.read()
+        self.assertIn(f"00:00:00,000 --> {format_srt_timestamp(block / sr)}", srt_content)
+        second_start = (block + 140) / sr
+        self.assertIn(
+            f"{format_srt_timestamp(second_start)} --> {format_srt_timestamp(second_start + block / sr)}",
+            srt_content,
+        )
+
     def test_compress_silences_keeps_audio_without_long_silences(self):
         sr = 1000
         speech = (np.sin(np.arange(500) / 3.0) * 12000).astype(np.int16)
