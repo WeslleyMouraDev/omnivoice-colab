@@ -674,9 +674,12 @@ with gr.Blocks(theme=theme, css=css, title="OmniVoice Colab Studio") as demo:
                 res = _gen_core(text, lang, ref_aud, None, ns, gs, dn, sp, du, pp, po, mode="clone", ref_text=ref_text)
                 if res[0] is None:
                     return None, res[1], None, None, None, None
-                
+
                 audio_tuple, status = res
                 sr, waveform = audio_tuple
+                # Encurta silêncios antes do Whisper para o SRT seguir o áudio final.
+                waveform = studio_core.compress_silences(waveform, sr)
+                audio_tuple = (sr, waveform)
                 tmp_wav = tts_file_name(text, language=lang)
                 wavfile.write(tmp_wav, sr, waveform)
                 

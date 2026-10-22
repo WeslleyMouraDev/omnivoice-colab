@@ -309,6 +309,74 @@ def convert_wav_to_mp3(wav_path: str, mp3_path: str, bitrate: str = "192k") -> s
 
 
 # ---------------------------------------------------------------------------
+# Remoção de silêncio do áudio final
+# ---------------------------------------------------------------------------
+MAX_PAUSE_MS = int(os.environ.get("OMNIVOICE_MAX_PAUSE_MS", "300") or 300)
+EDGE_SILENCE_MS = int(os.environ.get("OMNIVOICE_EDGE_SILENCE_MS", "80") or 80)
+SILENCE_THRESHOLD_DB = float(os.environ.get("OMNIVOICE_SILENCE_THRESHOLD_DB", "-42") or -42)
+
+
+def compress_silences(
+    waveform: np.ndarray,
+    sampling_rate: int,
+    max_pause_ms: Optional[int] = None,
+    edge_ms: Optional[int] = None,
+    threshold_db: Optional[float] = None,
+    frame_ms: int = 20,
+) -> np.ndarray:
+    """
+    Encurta silêncios do áudio final sem cortar fala:
+    - pausas internas maiores que max_pause_ms ficam com max_pause_ms
+      (metade preservada no fim da fala anterior e metade antes da próxima);
+    - silêncio no início e no fim fica com edge_ms.
+    Deve rodar antes de gerar o SRT, para as legendas acompanharem o áudio.
+    """
+    max_pause_ms = MAX_PAUSE_MS if max_pause_ms is None else max_pause_ms
+    edge_ms = EDGE_SILENCE_MS if edge_ms is None else edge_ms
+    threshold_db = SILENCE_THRESHOLD_DB if threshold_db is None else threshold_db
+    samples = np.asarray(waveform)
+    if samples.ndim != 1 or samples.size == 0:
+        return samples
+
+    frame = max(1, int(sampling_rate * frame_ms / 1000))
+    frames = samples.size // frame
+    if frames == 0:
+        return samples
+    scale = 32768.0 if samples.dtype == np.int16 else 1.0
+    body = samples[: frames * frame].astype(np.float64).reshape(frames, frame) / scale
+    rms = np.sqrt(np.mean(body * body, axis=1))
+    silent = 20 * np.log10(np.maximum(rms, 1e-10)) < threshold_db
+    if silent.all():
+        return samples[:0]
+
+    keep_pause = int(sampling_rate * max_pause_ms / 1000)
+    keep_edge = int(sampling_rate * edge_ms / 1000)
+    pieces: List[np.ndarray] = []
+    index = 0
+    while index < frames:
+        end = index
+        while end < frames and silent[end] == silent[index]:
+            end += 1
+        start_sample = index * frame
+        end_sample = end * frame if end < frames else samples.size
+        segment = samples[start_sample:end_sample]
+        if not silent[index]:
+            pieces.append(segment)
+        elif index == 0:
+            pieces.append(segment[max(0, segment.size - keep_edge):])
+        elif end >= frames:
+            pieces.append(segment[:keep_edge])
+        elif segment.size > keep_pause:
+            half = keep_pause // 2
+            pieces.append(segment[:half])
+            pieces.append(segment[segment.size - (keep_pause - half):])
+        else:
+            pieces.append(segment)
+        index = end
+    return np.concatenate(pieces)
+
+
+# ---------------------------------------------------------------------------
 # Síntese em lotes na GPU
 # ---------------------------------------------------------------------------
 DEFAULT_TTS_BATCH_SIZE = int(os.environ.get("OMNIVOICE_TTS_BATCH_SIZE", "8") or 8)

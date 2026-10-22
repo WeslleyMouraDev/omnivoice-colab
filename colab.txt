@@ -6,5 +6,7 @@ scipy
 pysrt>=1.1.2
 sentencex>=1.0.17
 faster-whisper==1.1.1
+# PyAV 19 removeu metadata_errors, usado pelo faster-whisper ao ler o áudio
+av<19
 ctranslate2==4.6.0
 gradio_client

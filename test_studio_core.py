@@ -10,6 +10,7 @@ from studio_core import (
     get_cached_voice,
     generate_blocks_tts,
     prepare_voice_prompt,
+    compress_silences,
     VOICE_CACHE,
     VOICE_META,
 )
@@ -129,6 +130,23 @@ class TestStudioCore(unittest.TestCase):
         self.assertIn("1\n00:00:00,000 --> 00:00:01,000", srt_content)
         # Bloco 2 deve iniciar exatamente em 1s + 200ms = 1.2s -> 00:00:01,200
         self.assertIn("2\n00:00:01,200 --> 00:00:02,200", srt_content)
+
+    def test_compress_silences_shortens_pauses_and_edges_but_keeps_speech(self):
+        sr = 1000
+        speech = (np.sin(np.arange(500) / 3.0) * 12000).astype(np.int16)
+        silence = lambda ms: np.zeros(ms, dtype=np.int16)
+        audio = np.concatenate([silence(900), speech, silence(1500), speech, silence(200), speech, silence(1200)])
+        out = compress_silences(audio, sr, max_pause_ms=300, edge_ms=80, threshold_db=-42, frame_ms=20)
+        self.assertEqual(len(out), 80 + 500 + 300 + 500 + 200 + 500 + 80)
+        speech_samples = np.count_nonzero(np.abs(out) > 1000)
+        self.assertEqual(speech_samples, 3 * np.count_nonzero(np.abs(speech) > 1000))
+
+    def test_compress_silences_keeps_audio_without_long_silences(self):
+        sr = 1000
+        speech = (np.sin(np.arange(500) / 3.0) * 12000).astype(np.int16)
+        audio = np.concatenate([speech, np.zeros(100, dtype=np.int16), speech])
+        out = compress_silences(audio, sr, max_pause_ms=300, edge_ms=80, frame_ms=20)
+        self.assertTrue(np.array_equal(out, audio))
 
     def _voice_model(self, asr_text, seconds=12.75, frame_rate=25):
         calls = []
