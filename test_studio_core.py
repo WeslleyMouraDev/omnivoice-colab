@@ -9,6 +9,7 @@ from studio_core import (
     register_voice,
     get_cached_voice,
     generate_blocks_tts,
+    prepare_voice_prompt,
     VOICE_CACHE,
     VOICE_META,
 )
@@ -128,6 +129,46 @@ class TestStudioCore(unittest.TestCase):
         self.assertIn("1\n00:00:00,000 --> 00:00:01,000", srt_content)
         # Bloco 2 deve iniciar exatamente em 1s + 200ms = 1.2s -> 00:00:01,200
         self.assertIn("2\n00:00:01,200 --> 00:00:02,200", srt_content)
+
+    def _voice_model(self, asr_text, seconds=12.75, frame_rate=25):
+        calls = []
+
+        class Prompt:
+            def __init__(self, ref_text):
+                self.ref_text = ref_text
+                self.ref_audio_tokens = np.zeros((8, int(seconds * frame_rate)))
+
+        class VoiceModel:
+            class audio_tokenizer:
+                class config:
+                    pass
+
+            def create_voice_clone_prompt(self, ref_audio, ref_text=None):
+                calls.append(ref_text)
+                return Prompt(ref_text if ref_text is not None else asr_text)
+
+        VoiceModel.audio_tokenizer.config.frame_rate = frame_rate
+        return VoiceModel(), calls
+
+    def test_prepare_voice_prompt_uses_omnivoice_asr_when_whisper_fails(self):
+        real = "Oi, eu sou o criador do canal e hoje vou te mostrar como o salário some antes do dia trinta chegar."
+        model, calls = self._voice_model(real)
+        prompt, transcript = prepare_voice_prompt(model, "voz.mp3", transcribe=lambda *_a, **_k: "")
+        self.assertEqual(calls, [None], "sem transcrição, o OmniVoice deve transcrever a referência")
+        self.assertEqual(transcript, real)
+        self.assertEqual(prompt.ref_text, real)
+
+    def test_prepare_voice_prompt_never_uses_generic_placeholder(self):
+        model, _ = self._voice_model("Áudio de referência")
+        with self.assertRaises(ValueError):
+            prepare_voice_prompt(model, "voz.mp3", transcribe=lambda *_a, **_k: "")
+
+    def test_prepare_voice_prompt_keeps_whisper_transcript(self):
+        real = "Oi, eu sou o criador do canal e hoje vou te mostrar como o salário some antes do dia trinta chegar."
+        model, calls = self._voice_model("não usado")
+        _, transcript = prepare_voice_prompt(model, "voz.mp3", transcribe=lambda *_a, **_k: real)
+        self.assertEqual(calls, [real])
+        self.assertEqual(transcript, real)
 
     def _sized_model(self, fail_above=None):
         # Cada bloco vira um áudio com tamanho proporcional ao texto, para

@@ -291,12 +291,8 @@ def core_prepare_voice(ref_audio: str) -> Tuple[str, str, str]:
         return "", "", "Erro: Modelo OmniVoice não carregado na memória."
 
     try:
-        # Transcrição com faster-whisper (CPU / int8)
-        transcript = studio_core.transcribe_reference_audio(ref_audio, lang="pt")
-        if not transcript:
-            transcript = "Áudio de referência"
-
-        voice_prompt = model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=transcript)
+        # Transcrição real da referência (faster-whisper na CPU ou ASR do OmniVoice)
+        voice_prompt, transcript = studio_core.prepare_voice_prompt(model, ref_audio)
         voice_id = studio_core.register_voice(voice_prompt, transcript, ref_audio)
         return voice_id, transcript, f"Voz preparada com sucesso! ID: {voice_id}"
     except Exception as e:

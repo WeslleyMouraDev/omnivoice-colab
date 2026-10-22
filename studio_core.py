@@ -67,6 +67,51 @@ def transcribe_reference_audio(audio_path: str, lang: str = "pt") -> str:
         return ""
 
 
+# Fala natural em português fica perto de 12 a 16 caracteres por segundo. Abaixo
+# deste limite a transcrição não descreve o áudio de referência, e o OmniVoice
+# estimaria durações várias vezes maiores para cada frase (fala esticada).
+MIN_REFERENCE_CHARS_PER_SECOND = 4.0
+
+
+def _reference_seconds(model: Any, voice_prompt: Any) -> Optional[float]:
+    try:
+        tokens = voice_prompt.ref_audio_tokens
+        chunks = tokens if isinstance(tokens, (list, tuple)) else [tokens]
+        frames = sum(chunk.shape[-1] for chunk in chunks)
+        return float(frames) / float(model.audio_tokenizer.config.frame_rate)
+    except Exception:  # noqa: BLE001 - sem metadados, a checagem é ignorada
+        return None
+
+
+def prepare_voice_prompt(model: Any, ref_audio: str, transcribe=None) -> Tuple[Any, str]:
+    """
+    Cria o prompt de clonagem com a transcrição real do áudio de referência.
+    1. Tenta o faster-whisper na CPU.
+    2. Se ele falhar, deixa o OmniVoice transcrever com o ASR embutido (GPU).
+    3. Recusa transcrições incompatíveis com a duração do áudio, porque elas
+       fazem o modelo esticar a fala de todo o roteiro.
+    Nunca usa um texto genérico no lugar da transcrição.
+    """
+    transcribe = transcribe or transcribe_reference_audio
+    transcript = (transcribe(ref_audio, lang="pt") or "").strip()
+    if transcript:
+        voice_prompt = model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=transcript)
+    else:
+        logger.warning("faster-whisper não transcreveu a referência; usando o ASR do OmniVoice.")
+        voice_prompt = model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=None)
+        transcript = str(getattr(voice_prompt, "ref_text", "") or "").strip()
+    if not transcript:
+        raise ValueError("Não foi possível transcrever o áudio de referência.")
+    seconds = _reference_seconds(model, voice_prompt)
+    if seconds and len(transcript) / seconds < MIN_REFERENCE_CHARS_PER_SECOND:
+        raise ValueError(
+            f"A transcrição do áudio de referência tem {len(transcript)} caracteres para "
+            f"{seconds:.1f} s de fala e parece incompleta: \"{transcript}\". "
+            "Use um áudio com fala contínua de 5 a 15 segundos."
+        )
+    return voice_prompt, transcript
+
+
 # ---------------------------------------------------------------------------
 # Divisão Inteligente de Texto para Legendas e Síntese
 # ---------------------------------------------------------------------------
